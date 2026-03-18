@@ -53,6 +53,8 @@ pub struct ProxyConfig {
     pub lookback_key: String,
     pub lookback_sequence_legacy: Vec<u8>,
     pub lookback_sequence_kitty: Vec<u8>,
+    pub lookback_exit_sequences: Vec<Vec<u8>>,
+    pub lookback_exit_keys_display: Vec<String>,
     pub auto_lookback_timeout_ms: u64,
 }
 
@@ -63,6 +65,8 @@ impl Default for ProxyConfig {
             lookback_key: "[ctrl][6]".to_string(),
             lookback_sequence_legacy: vec![0x1E],
             lookback_sequence_kitty: b"\x1b[54;5u".to_vec(),
+            lookback_exit_sequences: vec![vec![b'q'], vec![0x1b]],
+            lookback_exit_keys_display: vec!["q".to_string(), "Esc".to_string()],
             auto_lookback_timeout_ms: 15000,
         }
     }
@@ -834,7 +838,14 @@ impl Proxy {
         };
 
         for &byte in data {
-            if self.in_lookback_mode && byte == 0x03 {
+            if self.in_lookback_mode
+                && (byte == 0x03
+                    || self
+                        .config
+                        .lookback_exit_sequences
+                        .iter()
+                        .any(|seq| seq.len() == 1 && seq[0] == byte))
+            {
                 self.lookback_input_buffer.clear();
                 self.exit_lookback_mode(stdout_fd)?;
                 continue;
@@ -921,9 +932,17 @@ impl Proxy {
         write_all(&stdout_fd, CURSOR_HOME)?;
         write_all(&stdout_fd, &self.output_buffer)?;
 
+        let exit_keys_str = if self.config.lookback_exit_keys_display.is_empty() {
+            format!("{} or Ctrl+C", self.config.lookback_key)
+        } else {
+            let mut keys: Vec<String> = vec![self.config.lookback_key.clone()];
+            keys.extend(self.config.lookback_exit_keys_display.clone());
+            keys.push("Ctrl+C".to_string());
+            keys.join(", ")
+        };
         let exit_msg = format!(
-            "\r\n\x1b[7m--- LOOKBACK MODE: press {} or Ctrl+C to exit ---\x1b[0m\r\n",
-            self.config.lookback_key
+            "\r\n\x1b[7m--- LOOKBACK MODE: press {} to exit ---\x1b[0m\r\n",
+            exit_keys_str
         );
         write_all(&stdout_fd, exit_msg.as_bytes())?;
 
